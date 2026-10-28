@@ -12,10 +12,13 @@ JSON string. Field names are camelCase.
 
 ## Methods
 
-### `wallets() → { ok, wallets: [{ seed, name, locked, kinds, privateName? }] }`
+### `wallets() → { ok, wallets: [{ seed, name, locked, kinds, privateName?, holderSeed?, device?, wayIn? }] }`
 
 Every wallet. `name` shows while it is locked; `privateName`, when the person gave one, once it is
 unlocked. Any named module.
+- To a holder of that wallet only: `holderSeed`, its own name for the seed; `device`, the seed's
+  unlock key is known, so a way in may take the device; `wayIn`, it has a way in, so it can be
+  unlocked again after a lock.
 
 ### `data_key(params_json) → { ok, key, generation }`
 
@@ -33,7 +36,7 @@ the module by its caller identity, so a module only ever gets keys of its own.
   sealed before the person changed the wallet's keys, and seals it again under the current key.
 - `"profile"` is a key for data of no wallet, such as contacts: any unlocked wallet opens it.
 
-### `enroll_seed(params_json) → { ok, seed, new, unlocked }`
+### `enroll_seed(params_json) → { ok, seed, new, unlocked, device, wayIn }`
 
 A signer registers a seed it just added, from its add flow, while the holder's unlock key is at
 hand, so adding never asks twice: `{ "seed": "<the signer's own name for it>", "kind",
@@ -41,7 +44,12 @@ hand, so adding never asks twice: `{ "seed": "<the signer's own name for it>", "
 - `unlockKey` is the compressed public key at `m/1280263247'/0'` ([`unlock`](../src/unlock.rs)),
   33 bytes as hex; a holder that can't give one leaves it out.
 - The answer names the manager's wallet for that seed: a new one, unlocked, or a known one that
-  gained this holder.
+  gained this holder. `device` and `wayIn` are as in `wallets()`.
+- A known holder may send the key it couldn't give before. A wallet still open with no way in
+  then takes "device only"; a rule it already has stays.
+- A holder whose key is another wallet's is refused, and nothing changes: `{ ok: false, code:
+  "invalid", error, wallet }`, `wallet` the other wallet's name. The holder is added again to
+  join that wallet.
 
 Only the manager's configured signers may call it.
 
