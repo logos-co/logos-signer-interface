@@ -81,7 +81,7 @@ fn settle_key<S: Signer>(s: &mut S, job: &str, drive: &mut Drive<'_, S>) -> JobS
         }
         drive(s, job);
     }
-    panic!("unlock-key job {job} never settled");
+    panic!("an unlock-key job never settled");
 }
 
 /// A seed's unlock key at `index`, as the manager gets it, or why the signer gave none.
@@ -337,7 +337,7 @@ fn settle<S: Signer>(s: &mut S, job: &str, drive: &mut Drive<'_, S>) -> JobStatu
         }
         drive(s, job);
     }
-    panic!("job {job} never settled");
+    panic!("a job never settled");
 }
 
 pub fn info_is_well_formed<S: Signer>(s: &S) {
