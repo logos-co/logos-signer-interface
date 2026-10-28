@@ -1,0 +1,9 @@
+module wallets {
+  version "1.0.0"
+  description "logos.wallets/1: the signer manager's wallets, each module's own keys for a wallet's data, and a signer registering a seed it adds. Payloads are JSON; see docs/wallets.md"
+  method wallets() -> tstr
+  method data_key(params_json: tstr) -> tstr
+  method enroll_seed(params_json: tstr) -> tstr
+  event wallets_changed(seed: tstr)
+  event wallets_locked(count: int)
+}

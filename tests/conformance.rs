@@ -103,6 +103,7 @@ fn a_refusal_on_the_device_is_a_refused_job_with_no_signatures() {
             items: conformance::items_for(&account),
         },
         secret: None,
+        xpub: None,
     };
     let job = s.sign(req).unwrap();
     assert_eq!(s.status(&job).unwrap().state, JobState::ConfirmOnDevice);
@@ -124,6 +125,7 @@ fn a_cancelled_job_never_signs() {
             items: conformance::items_for(&account),
         },
         secret: None,
+        xpub: None,
     };
     let job = s.sign(req).unwrap();
     s.cancel(&job).unwrap();
@@ -155,6 +157,7 @@ fn the_json_replies_read_back_as_they_were_written() {
             items: conformance::items_for(&accounts[1]),
         },
         secret: Some(Secret::new("123456")),
+        xpub: None,
     };
     let job = json::read_job(&json::sign(&mut s, &serde_json::to_string(&req).unwrap())).unwrap();
     let status = json::read_status(&json::sign_status(&mut s, &job)).unwrap();
@@ -188,6 +191,7 @@ fn a_secret_never_prints() {
         account: "a".into(),
         payload: Payload::Hash { items: vec![] },
         secret: Some(s),
+        xpub: None,
     };
     assert!(!format!("{req:?}").contains("hunter2"));
 }
@@ -212,6 +216,7 @@ fn check_refuses_a_signature_over_another_digest_or_by_another_account() {
             account: account.id.clone(),
             payload: Payload::Hash { items: items.clone() },
             secret: None,
+            xpub: None,
         };
         let job = s.sign(req).unwrap();
         let sig = s.result(&job).unwrap().remove(0);
@@ -241,4 +246,134 @@ fn check_refuses_a_signature_over_another_digest_or_by_another_account() {
             );
         }
     }
+}
+
+fn unlock_key(s: &mut MockSigner, seed: &str, index: u32) -> Result<Secret> {
+    let job = s.unlock_key(UnlockKeyRequest {
+        seed: seed.into(),
+        index,
+        secret: None,
+    })?;
+    Ok(s.unlock_key_result(&job)?.key)
+}
+
+fn seed_of(s: &mut MockSigner) -> String {
+    s.accounts().unwrap()[0].seed.clone().unwrap()
+}
+
+#[test]
+fn every_holder_of_a_seed_gives_the_same_unlock_key() {
+    let mut keystore = MockSigner::new(MockOptions::default());
+    let mut device = MockSigner::new(MockOptions {
+        kind: "keycard".into(),
+        ..Default::default()
+    });
+    let mut other = MockSigner::new(MockOptions {
+        phrase: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".into(),
+        ..Default::default()
+    });
+    let seed = seed_of(&mut keystore);
+    assert_eq!(seed_of(&mut device), seed);
+    assert!(keystore
+        .accounts()
+        .unwrap()
+        .iter()
+        .all(|a| a.seed.as_deref() == Some(seed.as_str())));
+    let one = unlock_key(&mut keystore, &seed, 0).unwrap();
+    assert_eq!(unlock_key(&mut device, &seed, 0).unwrap(), one);
+    assert_ne!(unlock_key(&mut keystore, &seed, 1).unwrap(), one);
+
+    let theirs = seed_of(&mut other);
+    assert_ne!(theirs, seed);
+    assert_ne!(unlock_key(&mut other, &theirs, 0).unwrap(), one);
+    assert_eq!(unlock_key(&mut other, &seed, 0).unwrap_err().code, ErrorCode::WrongSeed);
+}
+
+#[test]
+fn the_unlock_key_is_the_public_key_at_the_unlock_path() {
+    use bitcoin::bip32::{DerivationPath, Xpriv, Xpub};
+    use bitcoin::secp256k1::Secp256k1;
+    use sha2::{Digest, Sha256};
+    use std::str::FromStr;
+
+    let mut seed = [0u8; 64];
+    pbkdf2::pbkdf2_hmac::<sha2::Sha512>(mock::PHRASE.as_bytes(), b"mnemonic", 2048, &mut seed);
+    let secp = Secp256k1::new();
+    let master = Xpriv::new_master(bitcoin::NetworkKind::Test, &seed).unwrap();
+    let at = master
+        .derive_priv(&secp, &DerivationPath::from_str("m/1280263247'/0'").unwrap())
+        .unwrap();
+    let expected = hex::encode(Xpub::from_priv(&secp, &at).public_key.serialize());
+
+    let mut s = MockSigner::new(MockOptions::default());
+    let named = hex::encode(Sha256::digest(
+        Xpub::from_priv(&secp, &master).public_key.serialize_uncompressed(),
+    ));
+    assert_eq!(seed_of(&mut s), named, "a seed is named as a Keycard names it");
+    assert_eq!(unlock_key(&mut s, &named, 0).unwrap().expose(), expected);
+}
+
+#[test]
+fn an_unplugged_device_gives_no_unlock_key() {
+    let mut s = MockSigner::new(MockOptions {
+        available: false,
+        ..Default::default()
+    });
+    let seed = seed_of(&mut s);
+    assert_eq!(unlock_key(&mut s, &seed, 0).unwrap_err().code, ErrorCode::Unavailable);
+}
+
+#[test]
+fn an_unlock_key_reads_once_over_json() {
+    let mut s = MockSigner::new(MockOptions::default());
+    let seed = seed_of(&mut s);
+    let job = json::read_job(&json::unlock_key(&mut s, &format!(r#"{{"seed":"{seed}","index":0}}"#))).unwrap();
+    let key = json::read_unlock_key(&json::unlock_key_result(&mut s, &job)).unwrap();
+    assert_eq!(key.key.expose().len(), 66);
+    assert!(json::read_unlock_key(&json::unlock_key_result(&mut s, &job)).is_err());
+    let foreign = json::read_job(&json::unlock_key(
+        &mut s,
+        &format!(r#"{{"seed":"{}"}}"#, "0".repeat(64)),
+    ));
+    assert_eq!(foreign.unwrap_err().code, ErrorCode::WrongSeed);
+    let past = json::read_job(&json::unlock_key(
+        &mut s,
+        &format!(r#"{{"seed":"{seed}","index":2147483648}}"#),
+    ));
+    assert!(past.is_err());
+}
+
+#[test]
+fn the_roster_key_is_the_one_the_manager_computes() {
+    use sha2::{Digest, Sha256};
+    use std::str::FromStr;
+    let mut s = MockSigner::new(MockOptions::default());
+    for a in s.accounts().unwrap().into_iter().filter(|a| a.family.is_bitcoin()) {
+        let xpub = bitcoin::bip32::Xpub::from_str(a.xpub.as_deref().unwrap()).unwrap();
+        let mut h = Sha256::new();
+        h.update(serde_json::to_string(&a.family).unwrap().as_bytes());
+        h.update(serde_json::to_string(&a.chain).unwrap().as_bytes());
+        h.update(xpub.chain_code.as_bytes());
+        h.update(xpub.public_key.serialize());
+        let manager = format!("btc_{}", hex::encode(&h.finalize()[..16]));
+        assert_eq!(a.key.as_deref(), Some(manager.as_str()), "{}", a.id);
+    }
+}
+
+#[test]
+fn nothing_signs_under_the_reserved_purpose() {
+    let mut s = MockSigner::new(MockOptions::default());
+    let req = SignRequest {
+        account: "mock-segwit".into(),
+        payload: Payload::Hash {
+            items: vec![HashItem {
+                path: Some("m/1280263247'/0'".into()),
+                scheme: Scheme::Ecdsa,
+                digest: "00".repeat(32),
+            }],
+        },
+        secret: None,
+        xpub: None,
+    };
+    assert_eq!(s.sign(req).unwrap_err().code, ErrorCode::Invalid);
 }

@@ -41,6 +41,7 @@ fn answers(doctor: Doctor) -> Vec<(Account, Vec<HashItem>, Vec<Signature>)> {
                 account: account.id.clone(),
                 payload: Payload::Hash { items: items.clone() },
                 secret: None,
+                xpub: None,
             };
             let job = s.sign(req).unwrap();
             let sigs = s.result(&job).unwrap();

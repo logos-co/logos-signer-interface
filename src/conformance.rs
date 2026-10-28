@@ -14,6 +14,7 @@ use k256::elliptic_curve::sec1::ToEncodedPoint;
 use rand_core::{OsRng, RngCore};
 use sha3::{Digest, Keccak256};
 
+use crate::unlock::{check_unlock_key, check_xpub, evm_path_ok, is_reserved};
 use crate::verify::{check, derive};
 use crate::wire::*;
 use crate::{Signer, INTERFACE};
@@ -65,7 +66,42 @@ fn request(account: &Account, items: Vec<HashItem>, secret: Option<Secret>) -> S
         account: account.id.clone(),
         payload: Payload::Hash { items },
         secret,
+        xpub: account.xpub.clone(),
     }
+}
+
+/// Run an unlock-key job to its end, driving the device while it waits.
+fn settle_key<S: Signer>(s: &mut S, job: &str, drive: &mut Drive<'_, S>) -> JobStatus {
+    for _ in 0..50 {
+        let st = s
+            .unlock_key_status(job)
+            .expect("status of an unlock-key job the signer just started");
+        if st.state.is_final() {
+            return st;
+        }
+        drive(s, job);
+    }
+    panic!("an unlock-key job never settled");
+}
+
+/// A seed's unlock key at `index`, as the manager gets it, or why the signer gave none.
+pub fn unlock_key_of<S: Signer>(
+    s: &mut S,
+    seed: &str,
+    index: u32,
+    secret: Option<Secret>,
+    drive: &mut Drive<'_, S>,
+) -> Result<UnlockKey> {
+    let job = s.unlock_key(UnlockKeyRequest {
+        seed: seed.into(),
+        index,
+        secret,
+    })?;
+    let st = settle_key(s, &job, drive);
+    if st.state != JobState::Done {
+        return Err(st.error.expect("a failed job says why"));
+    }
+    s.unlock_key_result(&job)
 }
 
 /// A request in a kind the signer takes, and the items its answer must sign.
@@ -123,6 +159,7 @@ pub fn request_for(info: &SignerInfo, account: &Account, secret: Option<Secret>)
             account: account.id.clone(),
             payload,
             secret,
+            xpub: account.xpub.clone(),
         },
         items,
     )
@@ -300,7 +337,7 @@ fn settle<S: Signer>(s: &mut S, job: &str, drive: &mut Drive<'_, S>) -> JobStatu
         }
         drive(s, job);
     }
-    panic!("job {job} never settled");
+    panic!("a job never settled");
 }
 
 pub fn info_is_well_formed<S: Signer>(s: &S) {
@@ -346,17 +383,120 @@ pub fn accounts_are_public_and_match_info<S: Signer>(s: &mut S) {
                 );
             }
             _ => {
-                let xpub = a.xpub.as_deref().unwrap_or_default();
+                let xpub = a
+                    .xpub
+                    .as_deref()
+                    .unwrap_or_else(|| panic!("{}: a Bitcoin account lists its xpub", a.id));
                 assert!(
                     xpub.starts_with("xpub") || xpub.starts_with("tpub"),
                     "{}: an xpub, never a private key",
                     a.id
                 );
+                if let Some(key) = a.key.as_deref() {
+                    assert!(
+                        key.starts_with("btc_") && key.len() == 36,
+                        "{}: roster key {key:?}",
+                        a.id
+                    );
+                    check_xpub(key, a.family, a.chain, xpub).unwrap_or_else(|e| panic!("{}: {e}", a.id));
+                }
                 assert!(a.path.is_some() && a.chain.is_some(), "{}: path and chain", a.id);
                 assert_eq!(a.fingerprint.as_deref().map(str::len), Some(8), "{}: fingerprint", a.id);
             }
         }
+        if info.unlock_key {
+            assert!(
+                a.seed.as_deref().is_some_and(|s| !s.is_empty()),
+                "{}: a signer that answers unlock_key names each account's seed",
+                a.id
+            );
+        }
+        if let Some(path) = a.path.as_deref() {
+            assert!(!is_reserved(path), "{}: an account under the reserved purpose", a.id);
+            if a.family == Family::Evm {
+                assert!(evm_path_ok(path), "{}: an EVM account under m/44'/60'", a.id);
+            }
+        }
     }
+}
+
+/// Each seed gives one unlock key per index, the same every time and read once; another index
+/// gives another key. A wrong secret or another seed's name gets none.
+pub fn unlock_keys_work<S: Signer>(s: &mut S, fx: &Fixture, drive: &mut Drive<'_, S>) {
+    let info = s.info();
+    if !info.unlock_key {
+        return;
+    }
+    let mut seeds: Vec<String> = s
+        .accounts()
+        .expect("accounts")
+        .into_iter()
+        .filter_map(|a| a.seed)
+        .collect();
+    seeds.sort();
+    seeds.dedup();
+    let mut seen = Vec::new();
+    for seed in &seeds {
+        let first = unlock_key_of(s, seed, 0, fx.secret.clone(), drive).unwrap_or_else(|e| panic!("{seed}: {e}"));
+        check_unlock_key(first.key.expose()).unwrap_or_else(|e| panic!("{seed}: {e}"));
+        let again = unlock_key_of(s, seed, 0, fx.secret.clone(), drive).unwrap_or_else(|e| panic!("{seed}: {e}"));
+        assert_eq!(again.key, first.key, "{seed}: the same key every time");
+        let next = unlock_key_of(s, seed, 1, fx.secret.clone(), drive).unwrap_or_else(|e| panic!("{seed}: {e}"));
+        assert_ne!(next.key, first.key, "{seed}: index 1 gives another key");
+        assert!(!seen.contains(&first.key), "{seed}: another seed's unlock key");
+        seen.push(first.key);
+
+        let job = s
+            .unlock_key(UnlockKeyRequest {
+                seed: seed.clone(),
+                index: 0,
+                secret: fx.secret.clone(),
+            })
+            .expect("unlock_key");
+        settle_key(s, &job, drive);
+        s.unlock_key_result(&job).expect("read once");
+        assert!(s.unlock_key_result(&job).is_err(), "{seed}: an unlock key read twice");
+
+        if info.collects != Collects::Nothing {
+            for (secret, code) in [
+                (fx.wrong_secret.clone(), ErrorCode::WrongSecret),
+                (None, ErrorCode::Locked),
+            ] {
+                let e = unlock_key_of(s, seed, 0, secret, drive).expect_err("an unlock key without its secret");
+                assert_eq!(e.code, code, "{seed}");
+            }
+        }
+    }
+    let foreign = unlock_key_of(s, &"0".repeat(64), 0, fx.secret.clone(), drive)
+        .expect_err("an unlock key for a seed it doesn't hold");
+    assert!(
+        matches!(foreign.code, ErrorCode::WrongSeed | ErrorCode::UnknownAccount),
+        "another seed: {:?}",
+        foreign.code
+    );
+}
+
+/// A Bitcoin request carrying another account's xpub is refused.
+pub fn a_foreign_xpub_is_refused<S: Signer>(s: &mut S, fx: &Fixture, drive: &mut Drive<'_, S>) {
+    let info = s.info();
+    let bitcoin: Vec<Account> = s
+        .accounts()
+        .expect("accounts")
+        .into_iter()
+        .filter(|a| a.family.is_bitcoin() && a.key.is_some())
+        .collect();
+    let [one, two, ..] = &bitcoin[..] else {
+        return;
+    };
+    let (mut r, _) = request_for(&info, one, fx.secret.clone());
+    r.xpub = two.xpub.clone();
+    let refused = match s.sign(r) {
+        Err(e) => e,
+        Ok(job) => settle(s, &job, drive)
+            .error
+            .expect("signed with another account's xpub"),
+    };
+    assert_eq!(refused.code, ErrorCode::Invalid, "{}", one.id);
 }
 
 pub fn unknown_accounts_and_jobs_are_refused<S: Signer>(s: &mut S, fx: &Fixture) {
@@ -368,6 +508,8 @@ pub fn unknown_accounts_and_jobs_are_refused<S: Signer>(s: &mut S, fx: &Fixture)
         fingerprint: None,
         address: None,
         xpub: None,
+        key: None,
+        seed: None,
         label: None,
         available: true,
     };
@@ -401,6 +543,7 @@ pub fn kinds_it_does_not_sign_are_refused<S: Signer>(s: &mut S, fx: &Fixture) {
                 message: hex::encode("hello"),
             },
             secret: fx.secret.clone(),
+            xpub: None,
         };
         assert_eq!(s.sign(r).unwrap_err().code, ErrorCode::Unsupported);
     }
@@ -476,6 +619,7 @@ pub fn paths_outside_an_account_are_refused<S: Signer>(s: &mut S, fx: &Fixture, 
                     psbt,
                 },
                 secret: fx.secret.clone(),
+                xpub: account.xpub.clone(),
             }
         };
         let refused = match s.sign(r) {
@@ -495,4 +639,6 @@ pub fn run<S: Signer>(s: &mut S, fx: &Fixture, drive: &mut Drive<'_, S>) {
     a_wrong_or_missing_secret_signs_nothing(s, fx, drive);
     every_account_signs_and_every_signature_checks(s, fx, drive);
     paths_outside_an_account_are_refused(s, fx, drive);
+    unlock_keys_work(s, fx, drive);
+    a_foreign_xpub_is_refused(s, fx, drive);
 }

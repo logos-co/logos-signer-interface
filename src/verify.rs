@@ -98,6 +98,21 @@ pub fn bip86_tweak(internal: &PublicKey) -> Result<(Scalar, schnorr::VerifyingKe
     Ok((t, out))
 }
 
+/// The key an ECDSA signature over `digest` recovers to, low or high S.
+pub fn recover_key(digest: &[u8; 32], sig: &[u8; 64], recovery_id: u8) -> Result<PublicKey> {
+    let sig = EcdsaSignature::from_slice(sig).map_err(|_| invalid("signature"))?;
+    let mut id = RecoveryId::from_byte(recovery_id).ok_or_else(|| invalid("recovery id"))?;
+    let sig = match sig.normalize_s() {
+        Some(low) => {
+            id = RecoveryId::new(!id.is_y_odd(), id.is_x_reduced());
+            low
+        }
+        None => sig,
+    };
+    let key = VerifyingKey::recover_from_prehash(digest, &sig, id).map_err(|_| invalid("no key recovers"))?;
+    Ok(PublicKey::from(&key))
+}
+
 /// The address an EVM signature recovers to.
 pub fn recover_evm(digest: &[u8; 32], sig: &[u8; 64], recovery_id: u8) -> Result<String> {
     let sig = EcdsaSignature::from_slice(sig).map_err(|_| invalid("signature"))?;

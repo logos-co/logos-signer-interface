@@ -58,6 +58,9 @@ pub struct SignerInfo {
     /// The device shows the request on its own screen.
     pub shows_request: bool,
     pub collects: Collects,
+    /// Answers `unlock_key`: the key, from a seed, that unlocks that seed's data.
+    #[serde(default)]
+    pub unlock_key: bool,
 }
 
 /// Public material only. `id` is what `sign` names.
@@ -77,8 +80,18 @@ pub struct Account {
     pub fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
+    /// A Bitcoin account's xpub. Listed to the signer manager only, and only while the account's
+    /// seed is unlocked: at rest a signer keeps it encrypted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub xpub: Option<String>,
+    /// A Bitcoin account's roster key ([`crate::unlock::roster_key`]): what other signers' copies of it
+    /// share, whatever the xpub's metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// The seed the account comes from, as this signer names it: a Keycard's key UID, a Shell's
+    /// master key id, a QR wallet's master fingerprint, a keystore wallet's id. `unlock_key` takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     pub available: bool,
@@ -182,6 +195,31 @@ pub struct SignRequest {
     pub payload: Payload,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret: Option<Secret>,
+    /// A Bitcoin account's xpub, from the wallet that has it open. The signer checks it against the
+    /// account's roster key before using it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xpub: Option<String>,
+}
+
+/// What the manager asks for when a seed unlocks. A module may read more fields from the same JSON,
+/// such as an account another module routes to it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UnlockKeyRequest {
+    /// The seed, as this signer names it ([`Account::seed`]).
+    pub seed: String,
+    /// The seed's unlock index ([`crate::unlock::unlock_key_path`]).
+    #[serde(default)]
+    pub index: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<Secret>,
+}
+
+/// A seed's unlock key: the compressed public key at its unlock path, 33 bytes as hex.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UnlockKey {
+    pub key: Secret,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -255,6 +293,8 @@ pub enum ErrorCode {
     Refused,
     Invalid,
     Internal,
+    /// The device holds another seed than the account's.
+    WrongSeed,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]

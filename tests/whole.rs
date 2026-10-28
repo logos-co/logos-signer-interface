@@ -40,6 +40,7 @@ fn sign(s: &mut MockSigner, account: &Account, payload: Payload) -> Result<Vec<S
         account: account.id.clone(),
         payload,
         secret: None,
+        xpub: None,
     })?;
     s.result(&job)
 }

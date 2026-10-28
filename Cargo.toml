@@ -23,6 +23,8 @@ bip32 = { version = "0.5", default-features = false, features = ["secp256k1", "s
 # BIP39 seeds for the mock; bip32's own mnemonic type takes 24 words only.
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
+# The box modules keep a wallet's data in, under their keys from `data_key`.
+chacha20poly1305 = "0.10"
 # The mock reads a whole PSBT the way a device does.
 bitcoin = { version = "0.32", optional = true, default-features = false, features = ["std", "base64"] }
 

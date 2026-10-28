@@ -8,9 +8,14 @@ wallet.
   and binds it to a signer module at runtime.
 - [`docs/interface.md`](docs/interface.md): the JSON every method takes and returns, the rules and
   the error codes.
+- [`wallets.lidl`](wallets.lidl) and [`docs/wallets.md`](docs/wallets.md): `logos.wallets/1`, what the
+  signer manager offers every module about wallets. A module binds it to `signer_manager_module` at
+  runtime to get its own keys for a wallet's data, and a signer registers the seeds it adds.
 - The Rust crate `logos-signer-interface`:
   - `wire`: the payload types.
   - `verify`: checks a signature against an account's address or xpub.
+  - `unlock`: a seed's unlock key path and checks, the roster key, and the path guards.
+  - `wallets`: `logos.wallets/1`'s payloads, and the box a module keeps a wallet's data in.
   - `jobs`: job bookkeeping a signer module can reuse.
   - `json`: builds a module's replies from a `Signer` and reads them back.
   - `conformance` (feature): the suite every signer runs in its own CI.
