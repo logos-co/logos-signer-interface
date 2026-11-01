@@ -40,7 +40,7 @@ the module by its caller identity, so a module only ever gets keys of its own.
 
 A signer registers a seed it just added, from its add flow, while the holder's unlock key is at
 hand, so adding never asks twice: `{ "seed": "<the signer's own name for it>", "kind",
-"unlockKey"?, "name", "origin"?, "birthday"? }`.
+"unlockKey"?, "name" }`.
 - `unlockKey` is the compressed public key at `m/1280263247'/0'` ([`unlock`](../src/unlock.rs)),
   33 bytes as hex; a holder that can't give one leaves it out.
 - The answer names the manager's wallet for that seed: a new one, unlocked, or a known one that

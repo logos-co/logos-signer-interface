@@ -70,12 +70,6 @@ pub struct EnrollSeed {
     pub unlock_key: Option<Secret>,
     /// The name the person gave it, shown while it is locked.
     pub name: String,
-    /// `created` when the signer made the seed, so it has no history; else `restored`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub origin: Option<String>,
-    /// Its first possible day, `YYYY-MM-DD`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub birthday: Option<String>,
 }
 
 /// The manager's wallet for that seed: new or known, and whether it is unlocked now.
@@ -257,5 +251,16 @@ mod tests {
             read_wallets(r#"{"ok":true,"wallets":[{"seed":"s_1","name":"Card","locked":true,"kinds":["keycard"]}]}"#)
                 .unwrap();
         assert_eq!((w[0].name.as_str(), w[0].locked), ("Card", true));
+    }
+
+    #[test]
+    fn an_older_signers_origin_and_birthday_are_ignored() {
+        let e: EnrollSeed = serde_json::from_str(
+            r#"{"seed":"g_1","kind":"keystore","name":"Main","origin":"restored","birthday":"2021-11-14"}"#,
+        )
+        .unwrap();
+        assert_eq!((e.seed.as_str(), e.name.as_str()), ("g_1", "Main"));
+        let sent = serde_json::to_string(&e).unwrap();
+        assert!(!sent.contains("origin") && !sent.contains("birthday"), "{sent}");
     }
 }
