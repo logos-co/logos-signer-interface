@@ -1,7 +1,7 @@
 //! What the signer manager offers every module about wallets, bound at runtime through
 //! `wallets.lidl` so no module depends on the manager at build time: the wallets there are, a
-//! module's own key for a wallet's data, and, for signers, registering a seed they add. Also the box
-//! every module keeps that data in. See `docs/wallets.md`.
+//! module's own key for a wallet's data, and, for signers, registering a seed they add and naming
+//! it. Also the box every module keeps that data in. See `docs/wallets.md`.
 
 use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
@@ -92,6 +92,54 @@ pub struct Wallet {
     /// Shown once unlocked, when the person gave one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_name: Option<String>,
+    /// The person gave `name`, so every holder shows it.
+    #[serde(default)]
+    pub named: bool,
+    /// To a holder of it only: the seed as that holder names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holder_seed: Option<String>,
+}
+
+/// A holder's app renamed a wallet: `name_seed`'s params.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NameSeed {
+    /// The seed as this signer names it.
+    pub seed: String,
+    pub name: String,
+}
+
+/// What a holder does about one of its seeds' names, from [`name_steps`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NameStep {
+    /// The person named it, here or in another app: keep this name. `seed` is the holder's own.
+    Take { seed: String, name: String },
+    /// No one has named it yet, and this holder has a name the person gave: send it once.
+    Send { seed: String, name: String },
+}
+
+/// Each step that brings a holder's names and the manager's together. `own` gives the name the
+/// person gave a seed in this holder, as the holder names the seed; none for a default.
+pub fn name_steps(listed: &[Wallet], own: impl Fn(&str) -> Option<String>) -> Vec<NameStep> {
+    listed
+        .iter()
+        .filter_map(|w| {
+            let seed = w.holder_seed.as_deref()?.trim();
+            let mine = own(seed).map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+            let theirs = w.name.trim();
+            match mine {
+                _ if w.named && !theirs.is_empty() => (mine.as_deref() != Some(theirs)).then(|| NameStep::Take {
+                    seed: seed.into(),
+                    name: theirs.into(),
+                }),
+                Some(m) if !w.named && m != theirs => Some(NameStep::Send {
+                    seed: seed.into(),
+                    name: m,
+                }),
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 pub fn read_data_key(reply: &str) -> Result<DataKey> {
@@ -107,6 +155,11 @@ pub fn read_account_key(reply: &str) -> Result<AccountKey> {
 pub fn read_enrolled(reply: &str) -> Result<Enrolled> {
     let v = parse_reply(reply)?;
     serde_json::from_value(v).map_err(|e| invalid(format!("enroll_seed reply: {e}")))
+}
+
+pub fn read_named(reply: &str) -> Result<NameSeed> {
+    let v = parse_reply(reply)?;
+    serde_json::from_value(v).map_err(|e| invalid(format!("name_seed reply: {e}")))
 }
 
 pub fn read_wallets(reply: &str) -> Result<Vec<Wallet>> {
@@ -203,6 +256,51 @@ mod tests {
             key: Secret::new(hex::encode([byte; 32])),
             generation,
         }
+    }
+
+    #[test]
+    fn a_holder_takes_a_given_name_and_sends_its_own_only_while_none_is() {
+        let reply = serde_json::json!({ "ok": true, "wallets": [
+            { "seed": "s_1", "name": "White Card #1", "named": true, "locked": false, "holderSeed": "uid1" },
+            { "seed": "s_2", "name": "Keycard 02246c2a", "locked": true, "holderSeed": "uid2" },
+            { "seed": "s_3", "name": "Keycard 9f00aa11", "locked": true, "holderSeed": "uid3" },
+            { "seed": "s_4", "name": "Same", "named": true, "locked": true, "holderSeed": "uid4" },
+            { "seed": "s_5", "name": "Not mine", "named": true, "locked": true }
+        ]});
+        let listed = read_wallets(&reply.to_string()).unwrap();
+        assert!(listed[0].named && !listed[1].named && listed[4].holder_seed.is_none());
+        let own = |seed: &str| match seed {
+            "uid1" => Some("Old name".to_string()),
+            "uid2" => Some(" Savings ".to_string()),
+            "uid4" => Some("Same".to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            name_steps(&listed, own),
+            vec![
+                NameStep::Take {
+                    seed: "uid1".into(),
+                    name: "White Card #1".into()
+                },
+                NameStep::Send {
+                    seed: "uid2".into(),
+                    name: "Savings".into()
+                },
+            ],
+            "uid3 has only the enrolled default, uid4 agrees already, s_5 is another holder's"
+        );
+        // An older manager lists no `named`: nothing is taken from it.
+        let old =
+            read_wallets(r#"{"ok":true,"wallets":[{"seed":"s","name":"n","locked":false,"holderSeed":"u"}]}"#).unwrap();
+        assert_eq!(name_steps(&old, |_| None), vec![]);
+        let named = read_named(r#"{"ok":true,"seed":"s_1","name":"White Card #1"}"#).unwrap();
+        assert_eq!(
+            named,
+            NameSeed {
+                seed: "s_1".into(),
+                name: "White Card #1".into()
+            }
+        );
     }
 
     #[test]

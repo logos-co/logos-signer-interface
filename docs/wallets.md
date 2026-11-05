@@ -66,6 +66,7 @@ manager's wallet takes `name` as the one name every app shows, marks it `named`,
 - A wallet not `named` yet still has the name its first holder enrolled it with. A holder with a
   name of its own the person gave sends it with `name_seed` once, so a name given before this
   contract is kept.
+- In Rust, `wallets::name_steps(&read_wallets(reply)?, own)` gives each `Take` and `Send`.
 
 ## Events
 
