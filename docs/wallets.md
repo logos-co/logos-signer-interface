@@ -12,10 +12,11 @@ JSON string. Field names are camelCase.
 
 ## Methods
 
-### `wallets() → { ok, wallets: [{ seed, name, locked, kinds, privateName?, holderSeed?, device?, wayIn? }] }`
+### `wallets() → { ok, wallets: [{ seed, name, named, locked, kinds, privateName?, holderSeed?, device?, wayIn? }] }`
 
 Every wallet. `name` shows while it is locked; `privateName`, when the person gave one, once it is
-unlocked. Any named module.
+unlocked. `named` says the person gave `name`, here or in a holder's app, rather than the holder
+that first enrolled it. Any named module.
 - To a holder of that wallet only: `holderSeed`, its own name for the seed; `device`, the seed's
   unlock key is known, so a way in may take the device; `wayIn`, it has a way in, so it can be
   unlocked again after a lock.
@@ -53,11 +54,24 @@ hand, so adding never asks twice: `{ "seed": "<the signer's own name for it>", "
 
 Only the manager's configured signers may call it.
 
+### `name_seed(params_json) → { ok, seed, name }`
+
+A holder's app renamed a wallet: `{ "seed": "<the signer's own name for it>", "name" }`. The
+manager's wallet takes `name` as the one name every app shows, marks it `named`, and announces
+`wallets_changed`. Only a configured signer that holds that seed may call it.
+
+**One name per wallet.** The manager keeps it; a holder keeps a copy for when no manager runs.
+- On `wallets_changed`, a holder reads `wallets()` and takes `name` for each wallet it holds that
+  is `named`.
+- A wallet not `named` yet still has the name its first holder enrolled it with. A holder with a
+  name of its own the person gave sends it with `name_seed` once, so a name given before this
+  contract is kept.
+
 ## Events
 
 | Event | When |
 |---|---|
-| `wallets_changed(seed)` | A wallet was added, unlocked or changed: read `wallets` again, and ask `data_key` again |
+| `wallets_changed(seed)` | A wallet was added, unlocked, renamed or changed: read `wallets` again, and ask `data_key` again |
 | `wallets_locked(count)` | Wallets were locked: drop what was read under their keys |
 
 ## The box
