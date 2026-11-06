@@ -1,7 +1,7 @@
 //! What the signer manager offers every module about wallets, bound at runtime through
 //! `wallets.lidl` so no module depends on the manager at build time: the wallets there are, a
-//! module's own key for a wallet's data, and, for signers, registering a seed they add and naming
-//! it. Also the box every module keeps that data in. See `docs/wallets.md`.
+//! module's own key for a wallet's data, and, for signers, registering a seed they add, naming it
+//! and forgetting it. Also the box every module keeps that data in. See `docs/wallets.md`.
 
 use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
@@ -109,6 +109,32 @@ pub struct NameSeed {
     pub name: String,
 }
 
+/// A holder removed a wallet in its own app: `forget_seed`'s params.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgetSeed {
+    /// The seed as this signer names it.
+    pub seed: String,
+}
+
+/// `forget_seed`'s answer: the manager's seed, and whether its wallet went with this holder, the last.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Forgotten {
+    pub seed: String,
+    pub removed: bool,
+}
+
+/// The seeds, as this holder names them, of the wallets the manager still lists it holding and it
+/// no longer has: each one to `forget_seed`. `has` says whether the holder has a seed of its own.
+pub fn stale_seeds(listed: &[Wallet], has: impl Fn(&str) -> bool) -> Vec<String> {
+    listed
+        .iter()
+        .filter_map(|w| w.holder_seed.as_deref().map(str::trim))
+        .filter(|s| !s.is_empty() && !has(s))
+        .map(String::from)
+        .collect()
+}
+
 /// What a holder does about one of its seeds' names, from [`name_steps`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NameStep {
@@ -160,6 +186,11 @@ pub fn read_enrolled(reply: &str) -> Result<Enrolled> {
 pub fn read_named(reply: &str) -> Result<NameSeed> {
     let v = parse_reply(reply)?;
     serde_json::from_value(v).map_err(|e| invalid(format!("name_seed reply: {e}")))
+}
+
+pub fn read_forgotten(reply: &str) -> Result<Forgotten> {
+    let v = parse_reply(reply)?;
+    serde_json::from_value(v).map_err(|e| invalid(format!("forget_seed reply: {e}")))
 }
 
 pub fn read_wallets(reply: &str) -> Result<Vec<Wallet>> {
@@ -349,6 +380,27 @@ mod tests {
             read_wallets(r#"{"ok":true,"wallets":[{"seed":"s_1","name":"Card","locked":true,"kinds":["keycard"]}]}"#)
                 .unwrap();
         assert_eq!((w[0].name.as_str(), w[0].locked), ("Card", true));
+        let f = read_forgotten(r#"{"ok":true,"seed":"s_1","removed":true}"#).unwrap();
+        assert_eq!(
+            f,
+            Forgotten {
+                seed: "s_1".into(),
+                removed: true
+            }
+        );
+    }
+
+    #[test]
+    fn a_holder_forgets_only_the_listed_seeds_of_its_own_it_no_longer_has() {
+        let reply = serde_json::json!({ "ok": true, "wallets": [
+            { "seed": "s_1", "name": "Kept", "locked": false, "holderSeed": "g_1" },
+            { "seed": "s_2", "name": "Removed", "locked": true, "holderSeed": " g_2 " },
+            { "seed": "s_3", "name": "Not mine", "locked": true },
+            { "seed": "s_4", "name": "Blank", "locked": true, "holderSeed": " " }
+        ]});
+        let listed = read_wallets(&reply.to_string()).unwrap();
+        assert_eq!(stale_seeds(&listed, |s| s == "g_1"), vec!["g_2".to_string()]);
+        assert!(stale_seeds(&listed, |_| true).is_empty());
     }
 
     #[test]

@@ -68,11 +68,25 @@ manager's wallet takes `name` as the one name every app shows, marks it `named`,
   contract is kept.
 - In Rust, `wallets::name_steps(&read_wallets(reply)?, own)` gives each `Take` and `Send`.
 
+### `forget_seed(params_json) → { ok, seed, removed }`
+
+A holder removed a wallet in its own app: `{ "seed": "<the signer's own name for it>" }`. The
+manager's wallet drops that holder and announces `wallets_changed`. With no holder left, the wallet
+goes: its record, its ways in and its key. `removed` says it did.
+- Every module's data under that wallet's keys can't be opened again. A module that sees the seed
+  gone from `wallets()` can delete it.
+- Data under `"profile"` opens with any wallet still there. Once the last one goes, it opens
+  again only until this run ends.
+- A holder that finds the manager still listing a seed it no longer has, from a removal the
+  manager missed, forgets it too: `wallets::stale_seeds(&read_wallets(reply)?, has)`.
+
+Only a configured signer that holds that seed may call it.
+
 ## Events
 
 | Event | When |
 |---|---|
-| `wallets_changed(seed)` | A wallet was added, unlocked, renamed or changed: read `wallets` again, and ask `data_key` again |
+| `wallets_changed(seed)` | A wallet was added, unlocked, renamed, changed or removed: read `wallets` again, and ask `data_key` again |
 | `wallets_locked(count)` | Wallets were locked: drop what was read under their keys |
 
 ## The box
