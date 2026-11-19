@@ -472,6 +472,7 @@ impl Signer for MockSigner {
             shows_request: self.opts.needs_confirmation,
             collects: self.opts.collects,
             unlock_key: true,
+            holds_key: false,
         }
     }
 

@@ -32,7 +32,7 @@ and events. Every payload is a JSON string. Field names are camelCase.
 
 Every reply is `{ "ok": true, … }` or `{ "ok": false, "code": <code>, "error": <text> }`.
 
-### `signer_info() → { ok, interface, kind, model, families, requestKinds, showsRequest, collects, unlockKey }`
+### `signer_info() → { ok, interface, kind, model, families, requestKinds, showsRequest, collects, unlockKey, holdsKey }`
 
 | Field | Meaning |
 |---|---|
@@ -43,6 +43,7 @@ Every reply is `{ "ok": true, … }` or `{ "ok": false, "code": <code>, "error":
 | `showsRequest` | The device shows the request on its own screen |
 | `collects` | What the host collects before `sign`: `nothing`, `password` or `pin` |
 | `unlockKey` | It answers `unlock_key` (absent: `false`) |
+| `holdsKey` | It can keep an account's key ready, so the signer manager may have it sign with nobody present (absent: `false`). The signer applies no terms of its own: who may sign, and how much, is the manager's |
 
 ### `signer_accounts() → { ok, accounts: [Account] }`
 
