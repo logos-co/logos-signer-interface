@@ -60,6 +60,8 @@ pub struct MockOptions {
     pub kind: String,
     /// Whether its "device" starts plugged in.
     pub available: bool,
+    /// `signer_info`'s `holdsKey`.
+    pub holds_key: bool,
 }
 
 impl Default for MockOptions {
@@ -73,6 +75,7 @@ impl Default for MockOptions {
             doctor: Doctor::None,
             kind: "mock".into(),
             available: true,
+            holds_key: false,
         }
     }
 }
@@ -472,6 +475,7 @@ impl Signer for MockSigner {
             shows_request: self.opts.needs_confirmation,
             collects: self.opts.collects,
             unlock_key: true,
+            holds_key: self.opts.holds_key,
         }
     }
 

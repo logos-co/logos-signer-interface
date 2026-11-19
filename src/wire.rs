@@ -61,6 +61,9 @@ pub struct SignerInfo {
     /// Answers `unlock_key`: the key, from a seed, that unlocks that seed's data.
     #[serde(default)]
     pub unlock_key: bool,
+    /// Can keep an account's key ready, so the manager may have it sign with nobody present.
+    #[serde(default)]
+    pub holds_key: bool,
 }
 
 /// Public material only. `id` is what `sign` names.
